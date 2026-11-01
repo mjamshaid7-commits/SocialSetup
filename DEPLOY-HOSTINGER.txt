@@ -1,37 +1,35 @@
-HOSTINGER NODE.JS DEPLOYMENT & DATA SAFETY GUIDE — TOPTECH SOCIAL STUDIO v2.0
+================================================================================
+TOPTECH SOCIAL STUDIO v2.0 — HOSTINGER GITHUB & NODE.JS DEPLOYMENT GUIDE
+================================================================================
 
-1. BUILD & UPLOAD
-   - Run `npm run build` before deploying (or run it on the server after `npm install`).
-   - `npm run build` compiles the React frontend into `dist/` and bundles the Express backend into `server.js`.
-   - Select Node.js 20+ in the Hostinger panel and set the application startup file to `server.js` (or `npm start`).
+1. WHY 503 SERVICE UNAVAILABLE HAPPENED PREVIOUSLY (AND HOW IT IS NOW FIXED)
+--------------------------------------------------------------------------------
+The 503 Service Unavailable error on Hostinger GitHub deployments was caused by:
+  a) Node 22 native TypeScript execution (`node server.ts` via `npm start`)
+     failing on non-`type` interface imports (`Request`, `ActivityLog`, etc.).
+     -> FIXED: All TypeScript interfaces now use explicit `type` imports, so
+        `node server.ts` (`npm start`) runs natively on Node 22 without errors.
+  b) LiteSpeed `lsnode.js` / Phusion Passenger failing on top-level `await`,
+     `app.listen(PORT, '0.0.0.0')` socket binding, and missing `dist/` + `server.js`.
+     -> FIXED: Top-level `await` has been removed, `app.listen(PORT)` binds
+        synchronously on the first tick, `dist/` and `server.js` (self-contained
+        CommonJS bundle) are tracked in Git, and `package.json` uses public
+        npm-compatible version ranges (`>=`).
 
-2. PROTECT EXISTING DATA (CRITICAL — PREVENT DATA LOSS)
-   - User posts, campaigns, media index, and activity logs live in `data/posts.json`.
-   - Automatic backup snapshots live in `data/backups/`.
-   - Uploaded images and videos live in `uploads/`.
-   - NEVER overwrite or delete `data/` or `uploads/` when deploying updated application code.
-   - Before every deployment, log into TopTech Social Studio -> Application Settings -> click "Download Full JSON Backup" (`toptech-social-backup.json`) and "Export All Posts (CSV)".
-
-3. ENVIRONMENT VARIABLES (.env)
-   Configure these variables in the Hostinger Node.js environment panel:
-   - NODE_ENV=production
-   - PORT=3000
-   - ADMIN_USERNAME=admin
-   - ADMIN_PASSWORD=CHANGE_THIS_TO_A_STRONG_PASSWORD
-   - SESSION_SECRET=CHANGE_THIS_TO_A_LONG_RANDOM_SECRET
-   - GEMINI_API_KEY=
-   - GEMINI_MODEL=gemini-2.5-flash
-   - OLLAMA_BASE_URL=http://localhost:11434  (Note: Only reachable if Ollama is installed on the same server/VPS)
-   - OLLAMA_MODEL=llama3.2
-   - ENABLE_FACEBOOK_PUBLISHING=false
-   - ENABLE_AUTO_PUBLISH=false
-   - META_PAGE_ID=
-   - META_PAGE_ACCESS_TOKEN=
-   - META_GRAPH_VERSION=
-
-4. FACEBOOK PUBLISHING SAFETY
-   - Keep `ENABLE_FACEBOOK_PUBLISHING=false` and `ENABLE_AUTO_PUBLISH=false` until you have tested your credentials in Connected Platforms -> "Test Facebook Page Connection".
-   - Enable `ENABLE_FACEBOOK_PUBLISHING=true` first to test manual publishing on a draft post before enabling `ENABLE_AUTO_PUBLISH=true`.
-
-5. ROLLBACK & RECOVERY
-   - If you ever need to roll back data after an import or edit, open Application Settings -> Data Safety & Timestamped Backups and click "Restore" next to any snapshot in `data/backups/`, or restore from your downloaded `toptech-social-backup.json`.
+2. DEPLOYING FROM GITHUB ON HOSTINGER (STEP-BY-STEP)
+--------------------------------------------------------------------------------
+1. Push/sync this updated codebase (including `server.js` and `dist/`) to your
+   GitHub repository (`SocialSetup`).
+2. In Hostinger hPanel -> Websites -> Manage -> Node.js:
+   - Node.js Version: 22.x (recommended) or 20.x
+   - Application Startup File / Entry File: `server.js`
+3. Under Hostinger Environment Variables, add your variables from
+   `toptech_social_studio_free_ai.env` (specifically `NODE_ENV=production`,
+   `ADMIN_PASSWORD`, `SESSION_SECRET`, and optional `GEMINI_API_KEY` /
+   `META_PAGE_ID` / `META_PAGE_ACCESS_TOKEN`).
+   Note: Even if you deploy before setting environment variables, the server
+   will start cleanly and guide you on the login screen and Login Info tab.
+4. Click "Deploy" (or "Redeploy") under Deployment from GitHub.
+5. Verify health at:
+   https://<your-domain>/api/health
+================================================================================

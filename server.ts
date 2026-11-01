@@ -1,23 +1,23 @@
 import 'dotenv/config';
-import express, { Request, Response, NextFunction } from 'express';
+import express, { type Request, type Response, type NextFunction } from 'express';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import multer from 'multer';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { GoogleGenAI, Type } from '@google/genai';
-import { fileURLToPath } from 'node:url';
 import {
   PLATFORMS,
   POST_TYPES,
-  PlatformId,
-  PostTypeId,
-  PostStatus,
-  SocialPost,
-  Campaign,
-  MediaAsset,
-  ActivityLog,
+  type PlatformId,
+  type PostTypeId,
+  type PostStatus,
+  type SocialPost,
+  type Campaign,
+  type MediaAsset,
+  type ActivityLog,
   normalizePlatform,
   normalizePostType,
   validatePostInput,
@@ -25,15 +25,15 @@ import {
   serializePostsToCsv,
 } from './src/shared/platforms.ts';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT_DIR = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
 const app = express();
-const PORT = Number(process.env.PORT || 3000);
-const DATA_DIR = path.join(__dirname, 'data');
+const PORT: string | number = process.env.PORT || 3000;
+const DATA_DIR = path.join(ROOT_DIR, 'data');
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const DB_FILE = path.join(DATA_DIR, 'posts.json');
-const UPLOAD_DIR = path.join(__dirname, 'uploads');
-const DIST_DIR = path.join(__dirname, 'dist');
-const PUBLIC_DIR = path.join(__dirname, 'public');
+const UPLOAD_DIR = path.join(ROOT_DIR, 'uploads');
+const DIST_DIR = path.join(ROOT_DIR, 'dist');
+const PUBLIC_DIR = path.join(ROOT_DIR, 'public');
 
 const SESSION_MS = 12 * 60 * 60 * 1000;
 const GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v23.0';
@@ -88,15 +88,13 @@ interface DatabaseSchema {
 const sessions = new Map<string, SessionRecord>();
 const inFlightPublishIds = new Set<string>();
 
-await fs.mkdir(DATA_DIR, { recursive: true });
-await fs.mkdir(BACKUP_DIR, { recursive: true });
-await fs.mkdir(UPLOAD_DIR, { recursive: true });
+fsSync.mkdirSync(DATA_DIR, { recursive: true });
+fsSync.mkdirSync(BACKUP_DIR, { recursive: true });
+fsSync.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-// Ensure .gitkeep in uploads
-try {
-  await fs.access(path.join(UPLOAD_DIR, '.gitkeep'));
-} catch {
-  await fs.writeFile(path.join(UPLOAD_DIR, '.gitkeep'), '');
+// Ensure .gitkeep in uploads synchronously (no top-level await for Hostinger Passenger/lsnode compatibility)
+if (!fsSync.existsSync(path.join(UPLOAD_DIR, '.gitkeep'))) {
+  fsSync.writeFileSync(path.join(UPLOAD_DIR, '.gitkeep'), '');
 }
 
 function createInitialSeedData(): DatabaseSchema {
@@ -273,11 +271,9 @@ function createInitialSeedData(): DatabaseSchema {
   };
 }
 
-// Initialize DB_FILE only if it does not already exist (never overwrite existing data!)
-try {
-  await fs.access(DB_FILE);
-} catch {
-  await fs.writeFile(DB_FILE, JSON.stringify(createInitialSeedData(), null, 2));
+// Initialize DB_FILE synchronously if it does not already exist (never overwrite existing data!)
+if (!fsSync.existsSync(DB_FILE)) {
+  fsSync.writeFileSync(DB_FILE, JSON.stringify(createInitialSeedData(), null, 2), 'utf8');
 }
 
 function normalizePostRecord(raw: Record<string, any>): SocialPost {
@@ -758,7 +754,7 @@ async function getSystemStatus(db: DatabaseSchema) {
     graphVersion: metaCreds.graphVersion,
     timezone: db.settings?.timezone || DEFAULT_TIMEZONE,
     nodeEnv: process.env.NODE_ENV || 'development',
-    port: PORT,
+    port: Number(process.env.PORT) || 3000,
   };
 }
 
@@ -2391,18 +2387,21 @@ setInterval(schedulerTick, 30_000).unref();
 // ============================================================================
 // FRONTEND SERVING (VITE DEV SERVER OR PRODUCTION DIST/)
 // ============================================================================
-if (process.env.NODE_ENV !== 'production') {
-  const { createServer: createViteServer } = await import('vite');
-  const vite = await createViteServer({
-    server: { middlewareMode: true },
-    appType: 'spa',
-  });
-  app.use(vite.middlewares);
-} else {
+const hasBuiltDist = fsSync.existsSync(path.join(DIST_DIR, 'index.html'));
+const useViteDevServer =
+  process.env.VITE_DEV_SERVER === 'true' ||
+  (process.env.NODE_ENV !== 'production' && !hasBuiltDist);
+
+if (!useViteDevServer) {
   app.use(express.static(DIST_DIR));
   app.use(express.static(PUBLIC_DIR));
   app.get('*', (_req, res) => {
-    res.sendFile(path.join(DIST_DIR, 'index.html'));
+    const indexPath = path.join(DIST_DIR, 'index.html');
+    if (fsSync.existsSync(indexPath)) {
+      res.sendFile(indexPath);
+    } else {
+      res.status(200).send('TopTech Social Studio server is running. Run npm run build to generate dist/index.html.');
+    }
   });
 }
 
@@ -2411,6 +2410,24 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   res.status(500).json({ error: err?.message || 'Unexpected server error.' });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`TopTech Social Studio v2.0 listening on http://0.0.0.0:${PORT}`);
-});
+if (useViteDevServer) {
+  import('vite')
+    .then(async ({ createServer: createViteServer }) => {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+      app.listen(PORT, () => {
+        console.log(`TopTech Social Studio v2.0 (dev) listening on port ${PORT}`);
+      });
+    })
+    .catch(err => {
+      console.error('Failed to start Vite dev server:', err);
+    });
+} else {
+  // Synchronous listen on first tick for Hostinger LiteSpeed (lsnode.js) & Phusion Passenger compatibility
+  app.listen(PORT, () => {
+    console.log(`TopTech Social Studio v2.0 listening on port ${PORT}`);
+  });
+}
