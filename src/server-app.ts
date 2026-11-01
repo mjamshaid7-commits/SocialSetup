@@ -1,13 +1,10 @@
 import 'dotenv/config';
 import express, { type Request, type Response, type NextFunction } from 'express';
-import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
 import multer from 'multer';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { GoogleGenAI, Type } from '@google/genai';
 import {
   PLATFORMS,
   POST_TYPES,
@@ -91,13 +88,15 @@ interface DatabaseSchema {
 const sessions = new Map<string, SessionRecord>();
 const inFlightPublishIds = new Set<string>();
 
-fsSync.mkdirSync(DATA_DIR, { recursive: true });
-fsSync.mkdirSync(BACKUP_DIR, { recursive: true });
-fsSync.mkdirSync(UPLOAD_DIR, { recursive: true });
-
-// Ensure .gitkeep in uploads synchronously (no top-level await for Hostinger Passenger/lsnode compatibility)
-if (!fsSync.existsSync(path.join(UPLOAD_DIR, '.gitkeep'))) {
-  fsSync.writeFileSync(path.join(UPLOAD_DIR, '.gitkeep'), '');
+try {
+  fsSync.mkdirSync(DATA_DIR, { recursive: true });
+  fsSync.mkdirSync(BACKUP_DIR, { recursive: true });
+  fsSync.mkdirSync(UPLOAD_DIR, { recursive: true });
+  if (!fsSync.existsSync(path.join(UPLOAD_DIR, '.gitkeep'))) {
+    fsSync.writeFileSync(path.join(UPLOAD_DIR, '.gitkeep'), '');
+  }
+} catch (initErr) {
+  console.warn('Storage directory init warning:', initErr);
 }
 
 function createInitialSeedData(): DatabaseSchema {
@@ -275,8 +274,12 @@ function createInitialSeedData(): DatabaseSchema {
 }
 
 // Initialize DB_FILE synchronously if it does not already exist (never overwrite existing data!)
-if (!fsSync.existsSync(DB_FILE)) {
-  fsSync.writeFileSync(DB_FILE, JSON.stringify(createInitialSeedData(), null, 2), 'utf8');
+try {
+  if (!fsSync.existsSync(DB_FILE)) {
+    fsSync.writeFileSync(DB_FILE, JSON.stringify(createInitialSeedData(), null, 2), 'utf8');
+  }
+} catch (seedErr) {
+  console.warn('Database seed init warning:', seedErr);
 }
 
 function normalizePostRecord(raw: Record<string, any>): SocialPost {
@@ -402,34 +405,47 @@ function logEntry(db: DatabaseSchema, type: string, message: string, postId: str
   db.logs = db.logs.slice(0, 400);
 }
 
-// Security headers & middleware
+// Security headers & middleware (native Express — avoids helmet/express-rate-limit proxy conflicts on Hostinger LiteSpeed)
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
-app.use(
-  helmet({
-    contentSecurityPolicy: false, // Allow Vite React bundle & Google Fonts in preview/production
-    crossOriginEmbedderPolicy: false,
-  })
-);
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: false }));
 app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '1h' }));
 
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 15,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: { error: 'Too many login attempts. Please wait 15 minutes before retrying.' },
-});
+function createMemoryRateLimiter(windowMs: number, maxRequests: number, errorMessage: string) {
+  const hits = new Map<string, { count: number; resetAt: number }>();
+  return (req: Request, res: Response, next: NextFunction) => {
+    const now = Date.now();
+    const key = String(req.ip || req.socket?.remoteAddress || 'global');
+    const record = hits.get(key);
+    if (!record || record.resetAt <= now) {
+      hits.set(key, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+    record.count += 1;
+    if (record.count > maxRequests) {
+      return res.status(429).json({ error: errorMessage });
+    }
+    return next();
+  };
+}
 
-const aiLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  limit: 20,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: { error: 'AI generation rate limit reached (max 20 requests/minute). Please wait a moment.' },
-});
+const loginLimiter = createMemoryRateLimiter(
+  15 * 60 * 1000,
+  20,
+  'Too many login attempts. Please wait 15 minutes before retrying.'
+);
+
+const aiLimiter = createMemoryRateLimiter(
+  60 * 1000,
+  25,
+  'AI generation rate limit reached (max 25 requests/minute). Please wait a moment.'
+);
 
 const ALLOWED_MIMES: Record<string, { ext: string; category: 'image' | 'video' }> = {
   'image/jpeg': { ext: '.jpg', category: 'image' },
@@ -1453,22 +1469,49 @@ async function generateWithFreeAi(
       );
     } else {
       try {
-        const ai = new GoogleGenAI({
-          apiKey: process.env.GEMINI_API_KEY,
-          httpOptions: {
+        let text = '';
+        try {
+          const { GoogleGenAI } = await import('@google/genai');
+          const ai = new GoogleGenAI({
+            apiKey: process.env.GEMINI_API_KEY,
+            httpOptions: {
+              headers: {
+                'User-Agent': 'aistudio-build',
+              },
+            },
+          });
+          const response = await ai.models.generateContent({
+            model: geminiModel,
+            contents: prompt,
+            config: {
+              systemInstruction,
+            },
+          });
+          text = String(response.text || '').trim();
+        } catch (sdkErr: any) {
+          // Fallback to direct Gemini REST API via Node 20 native fetch if SDK sub-dependencies are unavailable on shared hosting
+          const restUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(geminiModel)}:generateContent?key=${encodeURIComponent(String(process.env.GEMINI_API_KEY || ''))}`;
+          const restRes = await fetch(restUrl, {
+            method: 'POST',
             headers: {
+              'Content-Type': 'application/json',
               'User-Agent': 'aistudio-build',
             },
-          },
-        });
-        const response = await ai.models.generateContent({
-          model: geminiModel,
-          contents: prompt,
-          config: {
-            systemInstruction,
-          },
-        });
-        const text = String(response.text || '').trim();
+            body: JSON.stringify({
+              systemInstruction: systemInstruction
+                ? { parts: [{ text: systemInstruction }] }
+                : undefined,
+              contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            }),
+          });
+          const restJson = (await restRes.json()) as any;
+          if (!restRes.ok) {
+            throw new Error(restJson?.error?.message || sdkErr?.message || `Gemini HTTP ${restRes.status}`);
+          }
+          text = String(
+            restJson?.candidates?.[0]?.content?.parts?.map((p: any) => p.text || '').join('') || ''
+          ).trim();
+        }
         if (!text) {
           throw new Error('Gemini returned an empty response.');
         }
@@ -2398,13 +2441,18 @@ const useViteDevServer =
 if (!useViteDevServer) {
   app.use(express.static(DIST_DIR));
   app.use(express.static(PUBLIC_DIR));
-  app.get('*', (_req, res) => {
+  // Express 4 & Express 5 compatible SPA catch-all middleware (avoids path-to-regexp '*' crash on Express 5)
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.method !== 'GET' || req.path.startsWith('/api/') || req.path.startsWith('/uploads/')) {
+      return next();
+    }
     const indexPath = path.join(DIST_DIR, 'index.html');
     if (fsSync.existsSync(indexPath)) {
-      res.sendFile(indexPath);
-    } else {
-      res.status(200).send('TopTech Social Studio server is running. Run npm run build to generate dist/index.html.');
+      return res.sendFile(indexPath);
     }
+    return res
+      .status(200)
+      .send('TopTech Social Studio server is running. Run npm run build to generate dist/index.html.');
   });
 }
 
@@ -2429,8 +2477,10 @@ if (useViteDevServer) {
       console.error('Failed to start Vite dev server:', err);
     });
 } else {
-  // Synchronous listen on first tick for Hostinger LiteSpeed (lsnode.js) & Phusion Passenger compatibility
+  // Synchronous listen on first tick for Hostinger Node.js 20 Express / LiteSpeed (lsnode.js) & Passenger
   app.listen(PORT, () => {
     console.log(`TopTech Social Studio v2.0 listening on port ${PORT}`);
   });
 }
+
+export default app;
