@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "VITE_DEV_SERVER=true tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --external:vite --outfile=server.js",
+    "build": "vite build && esbuild src/server-app.ts --bundle --platform=node --format=cjs --external:vite --outfile=server.js",
     "start": "node server.ts",
     "start:prod": "node server.js",
     "preview": "vite preview",
