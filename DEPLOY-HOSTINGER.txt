@@ -1,0 +1,37 @@
+HOSTINGER NODE.JS DEPLOYMENT & DATA SAFETY GUIDE — TOPTECH SOCIAL STUDIO v2.0
+
+1. BUILD & UPLOAD
+   - Run `npm run build` before deploying (or run it on the server after `npm install`).
+   - `npm run build` compiles the React frontend into `dist/` and bundles the Express backend into `server.js`.
+   - Select Node.js 20+ in the Hostinger panel and set the application startup file to `server.js` (or `npm start`).
+
+2. PROTECT EXISTING DATA (CRITICAL — PREVENT DATA LOSS)
+   - User posts, campaigns, media index, and activity logs live in `data/posts.json`.
+   - Automatic backup snapshots live in `data/backups/`.
+   - Uploaded images and videos live in `uploads/`.
+   - NEVER overwrite or delete `data/` or `uploads/` when deploying updated application code.
+   - Before every deployment, log into TopTech Social Studio -> Application Settings -> click "Download Full JSON Backup" (`toptech-social-backup.json`) and "Export All Posts (CSV)".
+
+3. ENVIRONMENT VARIABLES (.env)
+   Configure these variables in the Hostinger Node.js environment panel:
+   - NODE_ENV=production
+   - PORT=3000
+   - ADMIN_USERNAME=admin
+   - ADMIN_PASSWORD=CHANGE_THIS_TO_A_STRONG_PASSWORD
+   - SESSION_SECRET=CHANGE_THIS_TO_A_LONG_RANDOM_SECRET
+   - GEMINI_API_KEY=
+   - GEMINI_MODEL=gemini-2.5-flash
+   - OLLAMA_BASE_URL=http://localhost:11434  (Note: Only reachable if Ollama is installed on the same server/VPS)
+   - OLLAMA_MODEL=llama3.2
+   - ENABLE_FACEBOOK_PUBLISHING=false
+   - ENABLE_AUTO_PUBLISH=false
+   - META_PAGE_ID=
+   - META_PAGE_ACCESS_TOKEN=
+   - META_GRAPH_VERSION=
+
+4. FACEBOOK PUBLISHING SAFETY
+   - Keep `ENABLE_FACEBOOK_PUBLISHING=false` and `ENABLE_AUTO_PUBLISH=false` until you have tested your credentials in Connected Platforms -> "Test Facebook Page Connection".
+   - Enable `ENABLE_FACEBOOK_PUBLISHING=true` first to test manual publishing on a draft post before enabling `ENABLE_AUTO_PUBLISH=true`.
+
+5. ROLLBACK & RECOVERY
+   - If you ever need to roll back data after an import or edit, open Application Settings -> Data Safety & Timestamped Backups and click "Restore" next to any snapshot in `data/backups/`, or restore from your downloaded `toptech-social-backup.json`.

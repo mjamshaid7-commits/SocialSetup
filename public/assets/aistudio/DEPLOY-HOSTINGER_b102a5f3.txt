@@ -1,0 +1,14 @@
+HOSTINGER NODE.JS DEPLOYMENT QUICK GUIDE
+
+1. Upload/extract this project to your Node.js application directory.
+2. Select Node.js 20+ and set startup file to server.js.
+3. Run npm install (the project uses Express, Multer, and the official @google/genai SDK).
+4. Configure environment variables from .env.example in the hosting panel. Never expose .env in public_html or commit secrets to GitHub.
+5. Set NODE_ENV=production, ADMIN_PASSWORD, SESSION_SECRET (32+ random characters), and APP_BASE_URL to your HTTPS domain.
+6. Optional AI: set GEMINI_API_KEY and optionally GEMINI_MODEL=gemini-2.5-flash. Gemini usage may have quotas/charges depending on account/model/region. Keep the key server-side.
+7. Facebook: configure META_PAGE_ID, META_PAGE_ACCESS_TOKEN and META_GRAPH_VERSION. Use official Meta permissions; do not store Facebook passwords.
+8. Start with ENABLE_FACEBOOK_PUBLISHING=false and ENABLE_AUTO_PUBLISH=false. Log in, test the Page connection, and test with a non-sensitive draft before enabling publishing.
+9. Ensure data/ and uploads/ are writable and persistent. Back them up and do not overwrite them during code deployments.
+10. For reliable scheduling, the Node process must remain running. Use a persistent host and consider a managed database/queue before production use.
+
+Current scope: single-admin MVP/starter. Public SaaS registration, tenant-isolated database, billing, OAuth connection flows for each platform, ZIP image extraction and multi-platform publishing are not implemented in this ZIP. Do not market this build as a complete production SaaS until those parts are built, tested and security-reviewed.

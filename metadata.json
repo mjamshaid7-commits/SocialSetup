@@ -1,0 +1,6 @@
+{
+  "name": "TopTech Social Studio",
+  "description": "Free-AI multi-platform social media content studio, campaign planner, bulk CSV manager, and scheduler by TopTech Solutions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
